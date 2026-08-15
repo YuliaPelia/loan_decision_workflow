@@ -12,3 +12,8 @@ export interface LoanNotification {
 export interface LoanNotifier {
   send(notification: LoanNotification): Promise<void>;
 }
+
+/** Development default: delivery is out of scope; production would swap the transport. */
+export class NoopLoanNotifier implements LoanNotifier {
+  async send(): Promise<void> {}
+}

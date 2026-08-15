@@ -1,21 +1,26 @@
-import {
+import type {
   LoanApplicationStatus as PrismaLoanApplicationStatus,
-  type PrismaClient,
+  Prisma,
+  PrismaClient,
 } from "@loan-review/db";
 
 import type {
-  AuditRecordInput,
+  ConfirmLoanApplicationInput,
+  DecideLoanApplicationInput,
+  DecisionResult,
   LoanApplicationRecord,
   LoanApplicationStatus,
-  LoanDecision,
   LoanRepository,
+  PlannedTransition,
 } from "./domain.js";
+import { LoanDecisionError, planConfirm, planDecide } from "./domain.js";
 
 function toRecord(application: {
   id: string;
   status: PrismaLoanApplicationStatus;
   requestedAmountMinor: number;
   approvedAmountMinor: number | null;
+  proposedByUserId: string | null;
   customerFullName: string;
   customerLastName: string;
   customerGender: string;
@@ -30,6 +35,7 @@ function toRecord(application: {
     status: application.status as LoanApplicationStatus,
     requestedAmountMinor: application.requestedAmountMinor,
     approvedAmountMinor: application.approvedAmountMinor,
+    proposedByUserId: application.proposedByUserId,
     customer: {
       fullName: application.customerFullName,
       lastName: application.customerLastName,
@@ -40,6 +46,38 @@ function toRecord(application: {
       nationalId: application.customerNationalId,
       monthlyIncomeMinor: application.monthlyIncomeMinor,
     },
+  };
+}
+
+async function persistTransition(
+  tx: Prisma.TransactionClient,
+  application: LoanApplicationRecord,
+  actorId: string,
+  planned: PlannedTransition,
+): Promise<DecisionResult> {
+  const updated = await tx.loanApplication.update({
+    where: { id: application.id },
+    data: {
+      status: planned.nextStatus as PrismaLoanApplicationStatus,
+      approvedAmountMinor: planned.approvedAmountMinor,
+      proposedByUserId: planned.proposedByUserId,
+    },
+  });
+
+  await tx.loanDecisionAudit.create({
+    data: {
+      applicationId: application.id,
+      actorId,
+      previousStatus: application.status as PrismaLoanApplicationStatus,
+      newStatus: planned.nextStatus as PrismaLoanApplicationStatus,
+      approvedAmountMinor: planned.approvedAmountMinor,
+      reason: planned.reason,
+    },
+  });
+
+  return {
+    application: toRecord(updated),
+    notification: { applicationId: application.id, type: planned.notificationType },
   };
 }
 
@@ -58,39 +96,29 @@ export class PrismaLoanRepository implements LoanRepository {
     return applications.map(toRecord);
   }
 
-  async deleteApplication(id: string): Promise<LoanApplicationRecord> {
-    const application = await this.client.loanApplication.delete({ where: { id } });
-    return toRecord(application);
+  async decide(actorId: string, input: DecideLoanApplicationInput): Promise<DecisionResult> {
+    return this.withLockedApplication(input.applicationId, async (application, tx) =>
+      persistTransition(tx, application, actorId, planDecide(application, actorId, input)),
+    );
   }
 
-  async updateApplication(
-    id: string,
-    decision: LoanDecision,
-    approvedAmountMinor: number | null,
-  ): Promise<LoanApplicationRecord> {
-    const application = await this.client.loanApplication.update({
-      where: { id },
-      data: {
-        status:
-          decision === "APPROVED"
-            ? PrismaLoanApplicationStatus.APPROVED
-            : PrismaLoanApplicationStatus.REJECTED,
-        approvedAmountMinor,
-      },
-    });
-    return toRecord(application);
+  async confirm(actorId: string, input: ConfirmLoanApplicationInput): Promise<DecisionResult> {
+    return this.withLockedApplication(input.applicationId, async (application, tx) =>
+      persistTransition(tx, application, actorId, planConfirm(application, actorId, input)),
+    );
   }
 
-  async createAudit(input: AuditRecordInput): Promise<void> {
-    await this.client.loanDecisionAudit.create({
-      data: {
-        applicationId: input.applicationId,
-        actorId: input.actorId,
-        previousStatus: input.previousStatus as PrismaLoanApplicationStatus,
-        newStatus: input.newStatus as PrismaLoanApplicationStatus,
-        approvedAmountMinor: input.approvedAmountMinor,
-        reason: input.reason,
-      },
+  private async withLockedApplication<T>(
+    applicationId: string,
+    fn: (application: LoanApplicationRecord, tx: Prisma.TransactionClient) => Promise<T>,
+  ): Promise<T> {
+    return this.client.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT 1 FROM "LoanApplication" WHERE "id" = ${applicationId} FOR UPDATE`;
+      const row = await tx.loanApplication.findUnique({ where: { id: applicationId } });
+      if (!row) {
+        throw new LoanDecisionError("NOT_FOUND", "Application not found");
+      }
+      return fn(toRecord(row), tx);
     });
   }
 }

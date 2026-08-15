@@ -1,18 +1,23 @@
 import type {
   AppLogger,
   AuditRecordInput,
+  ConfirmLoanApplicationInput,
+  DecideLoanApplicationInput,
+  DecisionResult,
   LoanApplicationRecord,
-  LoanDecision,
   LoanRepository,
   RequestContext,
   SessionUser,
 } from "../../src/domain.js";
+import { LoanDecisionError, planConfirm, planDecide } from "../../src/domain.js";
+import type { LoanNotification, LoanNotifier } from "../../src/notifier.js";
 
 const seededApplication: LoanApplicationRecord = {
   id: "app-pending",
   status: "PENDING_REVIEW",
   requestedAmountMinor: 500_000,
   approvedAmountMinor: null,
+  proposedByUserId: null,
   customer: {
     fullName: "Olena Kovalenko",
     lastName: "Kovalenko",
@@ -33,6 +38,7 @@ export class InMemoryLoanRepository implements LoanRepository {
   application = clone(seededApplication);
   audits: AuditRecordInput[] = [];
   failNextAudit = false;
+  private lock: Promise<void> = Promise.resolve();
 
   async findApplication(id: string): Promise<LoanApplicationRecord | null> {
     return id === this.application.id ? clone(this.application) : null;
@@ -42,40 +48,81 @@ export class InMemoryLoanRepository implements LoanRepository {
     return [clone(this.application)];
   }
 
-  async deleteApplication(id: string): Promise<LoanApplicationRecord> {
+  async decide(actorId: string, input: DecideLoanApplicationInput): Promise<DecisionResult> {
+    return this.withLock(async () => {
+      const application = await this.requireApplication(input.applicationId);
+      return this.persist(application, actorId, planDecide(application, actorId, input));
+    });
+  }
+
+  async confirm(actorId: string, input: ConfirmLoanApplicationInput): Promise<DecisionResult> {
+    return this.withLock(async () => {
+      const application = await this.requireApplication(input.applicationId);
+      return this.persist(application, actorId, planConfirm(application, actorId, input));
+    });
+  }
+
+  private async requireApplication(id: string): Promise<LoanApplicationRecord> {
     if (id !== this.application.id) {
-      throw new Error("Application not found");
+      throw new LoanDecisionError("NOT_FOUND", "Application not found");
     }
     return clone(this.application);
   }
 
-  async updateApplication(
-    id: string,
-    decision: LoanDecision,
-    approvedAmountMinor: number | null,
-  ): Promise<LoanApplicationRecord> {
-    if (id !== this.application.id) {
-      throw new Error("Application not found");
-    }
-    this.application.status = decision;
-    this.application.approvedAmountMinor = approvedAmountMinor;
-    return clone(this.application);
-  }
-
-  async createAudit(input: AuditRecordInput): Promise<void> {
+  private persist(
+    application: LoanApplicationRecord,
+    actorId: string,
+    planned: ReturnType<typeof planDecide>,
+  ): DecisionResult {
     if (this.failNextAudit) {
       this.failNextAudit = false;
       throw new Error("Injected audit failure");
     }
-    this.audits.push(clone(input));
+
+    this.application.status = planned.nextStatus;
+    this.application.approvedAmountMinor = planned.approvedAmountMinor;
+    this.application.proposedByUserId = planned.proposedByUserId;
+    this.audits.push({
+      applicationId: application.id,
+      actorId,
+      previousStatus: application.status,
+      newStatus: planned.nextStatus,
+      approvedAmountMinor: planned.approvedAmountMinor,
+      reason: planned.reason,
+    });
+
+    return {
+      application: clone(this.application),
+      notification: { applicationId: application.id, type: planned.notificationType },
+    };
+  }
+
+  private async withLock<T>(fn: () => Promise<T>): Promise<T> {
+    let release!: () => void;
+    const next = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const previous = this.lock;
+    this.lock = next;
+    await previous;
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
   }
 }
 
 export class CapturingLogger implements AppLogger {
-  events: Array<{ context: Record<string, unknown>; message: string }> = [];
+  events: Array<{ level: "info" | "error"; context: Record<string, unknown>; message: string }> =
+    [];
 
   info(context: Record<string, unknown>, message: string): void {
-    this.events.push({ context: clone(context), message });
+    this.events.push({ level: "info", context: clone(context), message });
+  }
+
+  error(context: Record<string, unknown>, message: string): void {
+    this.events.push({ level: "error", context: clone(context), message });
   }
 }
 
@@ -85,18 +132,33 @@ export const underwriter: SessionUser = {
   role: "UNDERWRITER",
 };
 
+export const confirmingUnderwriter: SessionUser = {
+  id: "user-underwriter-2",
+  name: "Grace Underwriter",
+  role: "UNDERWRITER",
+};
+
 export const supportAgent: SessionUser = {
   id: "user-support-1",
   name: "Sam Support",
   role: "SUPPORT",
 };
 
+export class RecordingLoanNotifier implements LoanNotifier {
+  sent: LoanNotification[] = [];
+
+  async send(notification: LoanNotification): Promise<void> {
+    this.sent.push(clone(notification));
+  }
+}
+
 export function createTestContext(
   repository = new InMemoryLoanRepository(),
   user: SessionUser = underwriter,
   logger = new CapturingLogger(),
+  notifier = new RecordingLoanNotifier(),
 ): RequestContext {
-  return { repository, session: { user }, logger };
+  return { repository, session: { user }, logger, notifier };
 }
 
 export function approvalInput(overrides: Record<string, unknown> = {}) {

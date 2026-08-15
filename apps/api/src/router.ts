@@ -3,11 +3,12 @@ import superjson from "superjson";
 import { z } from "zod";
 
 import type {
-  DecideLoanApplicationInput,
+  DecisionResult,
   LoanApplicationRecord,
   LoanApplicationView,
   RequestContext,
 } from "./domain.js";
+import { LoanDecisionError } from "./domain.js";
 
 const t = initTRPC.context<RequestContext>().create({ transformer: superjson });
 
@@ -19,7 +20,7 @@ const protectedProcedure = t.procedure.use(async ({ ctx, next }) => {
 });
 
 export const underwriterProcedure = protectedProcedure.use(async ({ ctx, next }) => {
-  if (!ctx.session.user.role) {
+  if (ctx.session.user.role !== "UNDERWRITER") {
     throw new TRPCError({ code: "FORBIDDEN" });
   }
   return next({ ctx });
@@ -28,7 +29,12 @@ export const underwriterProcedure = protectedProcedure.use(async ({ ctx, next })
 export const decideLoanApplicationSchema = z.object({
   applicationId: z.string().min(1),
   decision: z.enum(["APPROVED", "REJECTED"]),
-  approvedAmountMinor: z.number().optional(),
+  approvedAmountMinor: z.number().int().positive().optional(),
+  reason: z.string().min(1),
+});
+
+export const confirmLoanApplicationSchema = z.object({
+  applicationId: z.string().min(1),
   reason: z.string().min(1),
 });
 
@@ -38,6 +44,7 @@ function toView(application: LoanApplicationRecord): LoanApplicationView {
     status: application.status,
     requestedAmountMinor: application.requestedAmountMinor,
     approvedAmountMinor: application.approvedAmountMinor,
+    proposedByUserId: application.proposedByUserId,
     customer: {
       fullName: application.customer.fullName,
       lastName: application.customer.lastName,
@@ -48,19 +55,47 @@ function toView(application: LoanApplicationRecord): LoanApplicationView {
   };
 }
 
+function toDecisionResponse(result: DecisionResult) {
+  return {
+    applicationId: result.application.id,
+    status: result.application.status,
+    approvedAmountMinor: result.application.approvedAmountMinor,
+  };
+}
+
+function mapDecisionError(error: unknown): never {
+  if (error instanceof TRPCError) {
+    throw error;
+  }
+  if (error instanceof LoanDecisionError) {
+    throw new TRPCError({ code: error.code, message: error.message });
+  }
+  throw new TRPCError({
+    code: "INTERNAL_SERVER_ERROR",
+    message: "Decision failed",
+  });
+}
+
+async function deliverAfterCommit(ctx: RequestContext, result: DecisionResult): Promise<void> {
+  try {
+    await ctx.notifier.send(result.notification);
+  } catch {
+    ctx.logger.error(
+      {
+        applicationId: result.notification.applicationId,
+        type: result.notification.type,
+      },
+      "Notification delivery failed",
+    );
+  }
+}
+
 export const appRouter = t.router({
   loanApplications: t.router({
     list: protectedProcedure.query(async ({ ctx }) => {
       const applications = await ctx.repository.listApplications();
       return applications.map(toView);
     }),
-
-    delete: t.procedure
-      .input(z.object({ applicationId: z.string().min(1) }))
-      .mutation(async ({ ctx, input }) => {
-        const application = await ctx.repository.deleteApplication(input.applicationId);
-        return toView(application);
-      }),
 
     getForReview: protectedProcedure
       .input(z.object({ applicationId: z.string().min(1) }))
@@ -75,74 +110,44 @@ export const appRouter = t.router({
     decide: underwriterProcedure
       .input(decideLoanApplicationSchema)
       .mutation(async ({ ctx, input }) => {
-        try {
-          const application = await ctx.repository.findApplication(input.applicationId);
-          if (!application) {
-            throw new TRPCError({ code: "NOT_FOUND", message: "Application not found" });
-          }
-
-          ctx.logger.info(
-            { input, application, user: ctx.session.user },
-            "Processing loan decision",
-          );
-
-          if (application.status !== "PENDING_REVIEW") {
-            throw new TRPCError({ code: "CONFLICT", message: "Application already decided" });
-          }
-
-          validateBusinessRules(application, input);
-
-          const updated = await ctx.repository.updateApplication(
-            application.id,
-            input.decision,
-            input.approvedAmountMinor ?? null,
-          );
-
-          await ctx.repository.createAudit({
-            applicationId: application.id,
+        ctx.logger.info(
+          {
+            applicationId: input.applicationId,
+            decision: input.decision,
             actorId: ctx.session.user.id,
-            previousStatus: application.status,
-            newStatus: input.decision,
-            approvedAmountMinor: input.approvedAmountMinor ?? null,
-            reason: input.reason,
-          });
+          },
+          "Processing loan decision",
+        );
 
-          const response = {
-            applicationId: updated.id,
-            status: input.decision,
-            approvedAmountMinor: updated.approvedAmountMinor,
-          };
+        try {
+          const result = await ctx.repository.decide(ctx.session.user.id, input);
+          await deliverAfterCommit(ctx, result);
+          return toDecisionResponse(result);
+        } catch (error: unknown) {
+          mapDecisionError(error);
+        }
+      }),
 
-          return response;
-        } catch {
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message: "Decision failed",
-          });
+    confirm: underwriterProcedure
+      .input(confirmLoanApplicationSchema)
+      .mutation(async ({ ctx, input }) => {
+        ctx.logger.info(
+          {
+            applicationId: input.applicationId,
+            actorId: ctx.session.user.id,
+          },
+          "Processing loan confirmation",
+        );
+
+        try {
+          const result = await ctx.repository.confirm(ctx.session.user.id, input);
+          await deliverAfterCommit(ctx, result);
+          return toDecisionResponse(result);
+        } catch (error: unknown) {
+          mapDecisionError(error);
         }
       }),
   }),
 });
-
-function validateBusinessRules(
-  application: LoanApplicationRecord,
-  input: DecideLoanApplicationInput,
-): void {
-  if (!input.reason.trim()) {
-    throw new TRPCError({ code: "BAD_REQUEST", message: "A reason is required" });
-  }
-
-  if (input.decision === "APPROVED") {
-    if (
-      input.approvedAmountMinor === undefined ||
-      !Number.isInteger(input.approvedAmountMinor) ||
-      input.approvedAmountMinor > application.requestedAmountMinor
-    ) {
-      throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid approved amount" });
-    }
-  } else if (input.approvedAmountMinor !== undefined) {
-    throw new TRPCError({ code: "BAD_REQUEST", message: "Rejection cannot have an amount" });
-  }
-}
 
 export type AppRouter = typeof appRouter;

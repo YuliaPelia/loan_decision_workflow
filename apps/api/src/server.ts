@@ -5,11 +5,13 @@ import type { CreateFastifyContextOptions } from "@trpc/server/adapters/fastify"
 import Fastify from "fastify";
 
 import type { RequestContext, UserRole } from "./domain.js";
+import { NoopLoanNotifier } from "./notifier.js";
 import { PrismaLoanRepository } from "./repository.js";
 import { appRouter } from "./router.js";
 
 const server = Fastify({ logger: true, routerOptions: { maxParamLength: 5_000 } });
 const repository = new PrismaLoanRepository(prisma);
+const notifier = new NoopLoanNotifier();
 
 await server.register(cors, {
   origin: process.env.WEB_ORIGIN ?? "http://localhost:3000",
@@ -38,7 +40,11 @@ await server.register(fastifyTRPCPlugin, {
           info(context, message) {
             server.log.info(context, message);
           },
+          error(context, message) {
+            server.log.error(context, message);
+          },
         },
+        notifier,
       };
     },
   },
