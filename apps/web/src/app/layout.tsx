@@ -1,6 +1,7 @@
-import type { Metadata } from "next";
 import type { ReactNode } from "react";
+import type { Metadata } from "next";
 
+import { Providers } from "./providers";
 import "./styles.css";
 
 export const dynamic = "force-dynamic";
@@ -13,7 +14,9 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <Providers>{children}</Providers>
+      </body>
     </html>
   );
 }

@@ -89,9 +89,48 @@ h2 {
   color: #155d38;
 }
 
-.status-rejected,
-.error {
-  color: #9b2c2c;
+.status-pending_confirmation {
+  background: #e4eefc;
+  color: #1d4f91;
+}
+
+.session-bar {
+  align-items: baseline;
+  background: white;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  justify-content: space-between;
+  padding: 12px 24px;
+}
+
+.session-bar label {
+  align-items: center;
+  display: flex;
+  font-size: 0.92rem;
+  font-weight: 650;
+  gap: 10px;
+}
+
+.session-bar select {
+  border: 1px solid #aab5ad;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.session-bar p {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.back-link {
+  color: var(--brand);
+  display: inline-block;
+  font-size: 0.92rem;
+  font-weight: 700;
+  margin-bottom: 18px;
 }
 
 .summary-card {

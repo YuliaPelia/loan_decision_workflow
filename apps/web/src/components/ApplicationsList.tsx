@@ -12,11 +12,12 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { trpc } from "@/lib/trpc";
+import { formatMinorUnits } from "@/lib/money";
 
 const columnHelper = createColumnHelper<LoanApplicationView>();
 
 function formatMoney(minor: number) {
-  return new Intl.NumberFormat("en-GB", { style: "currency", currency: "EUR" }).format(minor / 100);
+  return formatMinorUnits(minor);
 }
 
 const columns = [
@@ -94,7 +95,7 @@ export function ApplicationsList() {
     onRowSelectionChange: setRowSelection,
   });
 
-  if (applicationsQuery.isFetching) {
+  if (applicationsQuery.isPending) {
     return <main className="shell applications-shell">Loading applications…</main>;
   }
 
