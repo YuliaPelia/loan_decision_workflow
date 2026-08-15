@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   DELEGATED_AUTHORITY_THRESHOLD_MINOR,
   LoanDecisionError,
+  POSTGRES_INTEGER_MAX,
   planConfirm,
   planDecide,
   type LoanApplicationRecord,
@@ -66,6 +67,69 @@ describe("planDecide", () => {
       proposedByUserId: underwriter.id,
       notificationType: "APPROVAL_PROPOSED",
     });
+  });
+
+  it("rejects amounts above the requested amount", () => {
+    expect(() =>
+      planDecide(pending({ requestedAmountMinor: 500_000 }), underwriter.id, {
+        applicationId: "app-pending",
+        decision: "APPROVED",
+        approvedAmountMinor: 500_001,
+        reason: "Too high",
+      }),
+    ).toThrow(LoanDecisionError);
+  });
+
+  it("rejects amounts above the PostgreSQL INTEGER ceiling", () => {
+    expect(() =>
+      planDecide(
+        pending({ requestedAmountMinor: Number.MAX_SAFE_INTEGER }),
+        underwriter.id,
+        approvalInput({ approvedAmountMinor: POSTGRES_INTEGER_MAX + 1 }),
+      ),
+    ).toThrow(LoanDecisionError);
+    expect(() =>
+      planDecide(
+        pending({ requestedAmountMinor: Number.MAX_SAFE_INTEGER }),
+        underwriter.id,
+        approvalInput({ approvedAmountMinor: Number.MAX_SAFE_INTEGER }),
+      ),
+    ).toThrow(LoanDecisionError);
+  });
+
+  it("rejects a whitespace-only reason", () => {
+    expect(() => planDecide(pending(), underwriter.id, approvalInput({ reason: "   " }))).toThrow(
+      LoanDecisionError,
+    );
+  });
+
+  it("treats APPROVED and REJECTED as terminal", () => {
+    expect(() =>
+      planDecide(pending({ status: "APPROVED", approvedAmountMinor: 400_000 }), underwriter.id, {
+        applicationId: "app-pending",
+        decision: "APPROVED",
+        approvedAmountMinor: 400_000,
+        reason: "Already final",
+      }),
+    ).toThrow(LoanDecisionError);
+    expect(() =>
+      planDecide(pending({ status: "REJECTED" }), underwriter.id, {
+        applicationId: "app-pending",
+        decision: "REJECTED",
+        reason: "Already final",
+      }),
+    ).toThrow(LoanDecisionError);
+    expect(() =>
+      planConfirm(
+        pending({
+          status: "APPROVED",
+          approvedAmountMinor: 400_000,
+          proposedByUserId: underwriter.id,
+        }),
+        confirmingUnderwriter.id,
+        { applicationId: "app-pending", reason: "Already final" },
+      ),
+    ).toThrow(LoanDecisionError);
   });
 
   it("rejects non-positive and non-integer amounts", () => {

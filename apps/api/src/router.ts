@@ -10,7 +10,14 @@ import type {
 } from "./domain.js";
 import { LoanDecisionError } from "./domain.js";
 
-const t = initTRPC.context<RequestContext>().create({ transformer: superjson });
+const t = initTRPC.context<RequestContext>().create({
+  transformer: superjson,
+  errorFormatter({ shape }) {
+    const data = { ...shape.data };
+    delete data.stack;
+    return { ...shape, data };
+  },
+});
 
 const protectedProcedure = t.procedure.use(async ({ ctx, next }) => {
   if (!ctx.session) {
@@ -30,12 +37,12 @@ export const decideLoanApplicationSchema = z.object({
   applicationId: z.string().min(1),
   decision: z.enum(["APPROVED", "REJECTED"]),
   approvedAmountMinor: z.number().int().positive().optional(),
-  reason: z.string().min(1),
+  reason: z.string().trim().min(1),
 });
 
 export const confirmLoanApplicationSchema = z.object({
   applicationId: z.string().min(1),
-  reason: z.string().min(1),
+  reason: z.string().trim().min(1),
 });
 
 function toView(application: LoanApplicationRecord): LoanApplicationView {

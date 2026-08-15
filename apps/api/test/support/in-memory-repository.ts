@@ -154,11 +154,11 @@ export class RecordingLoanNotifier implements LoanNotifier {
 
 export function createTestContext(
   repository = new InMemoryLoanRepository(),
-  user: SessionUser = underwriter,
+  user: SessionUser | null = underwriter,
   logger = new CapturingLogger(),
   notifier = new RecordingLoanNotifier(),
 ): RequestContext {
-  return { repository, session: { user }, logger, notifier };
+  return { repository, session: user ? { user } : null, logger, notifier };
 }
 
 export function approvalInput(overrides: Record<string, unknown> = {}) {

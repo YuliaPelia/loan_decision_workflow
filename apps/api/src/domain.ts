@@ -8,6 +8,9 @@ export type LoanDecision = "APPROVED" | "REJECTED";
 /** Inclusive ceiling for a single underwriter's delegated authority, in minor units. */
 export const DELEGATED_AUTHORITY_THRESHOLD_MINOR = 1_000_000;
 
+/** Prisma `Int` / PostgreSQL `INTEGER` ceiling. Workflow amounts fit; BigInt is out of scope. */
+export const POSTGRES_INTEGER_MAX = 2_147_483_647;
+
 export interface SessionUser {
   id: string;
   name: string;
@@ -133,6 +136,7 @@ export function planDecide(
     amount === undefined ||
     !Number.isSafeInteger(amount) ||
     amount <= 0 ||
+    amount > POSTGRES_INTEGER_MAX ||
     amount > application.requestedAmountMinor
   ) {
     throw new LoanDecisionError("BAD_REQUEST", "Invalid approved amount");

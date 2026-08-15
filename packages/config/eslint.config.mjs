@@ -30,7 +30,12 @@ export default tseslint.config(
     files: ["**/*.{ts,tsx}"],
     languageOptions: {
       parserOptions: {
-        projectService: defaultProjectFiles ? { allowDefaultProject: defaultProjectFiles } : true,
+        projectService: defaultProjectFiles
+          ? {
+              allowDefaultProject: defaultProjectFiles,
+              maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 16,
+            }
+          : true,
       },
       globals: {
         ...globals.node,

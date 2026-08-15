@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DecisionForm } from "../../src/components/DecisionForm";
-import { parseEuroToMinorUnits } from "../../src/lib/money";
+import { formatMinorUnits, parseEuroToMinorUnits } from "../../src/lib/money";
 
 afterEach(() => {
   cleanup();
@@ -17,6 +17,15 @@ describe("parseEuroToMinorUnits", () => {
     expect(parseEuroToMinorUnits("10")).toBe(1_000);
     expect(parseEuroToMinorUnits("12.345")).toBeNull();
     expect(parseEuroToMinorUnits("0")).toBeNull();
+    expect(parseEuroToMinorUnits("21474836.48")).toBeNull();
+  });
+});
+
+describe("formatMinorUnits", () => {
+  it("formats with integer division rather than float", () => {
+    expect(formatMinorUnits(125_050)).toBe("€1,250.50");
+    expect(formatMinorUnits(1)).toBe("€0.01");
+    expect(formatMinorUnits(100)).toBe("€1.00");
   });
 });
 
@@ -49,6 +58,19 @@ describe("DecisionForm", () => {
     await user.click(screen.getByRole("button", { name: "Record decision" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("two decimal places");
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("blocks a whitespace-only reason before submit", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(<DecisionForm mode="initial" onSubmit={onSubmit} requestedAmountMinor={500_000} />);
+
+    await user.type(screen.getByLabelText(/Approved amount/), "100");
+    await user.type(screen.getByLabelText("Reason"), "   ");
+    await user.click(screen.getByRole("button", { name: "Record decision" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("A reason is required.");
     expect(onSubmit).not.toHaveBeenCalled();
   });
 

@@ -30,11 +30,19 @@ export function DecisionForm({
   const [approvedAmount, setApprovedAmount] = useState("");
   const [reason, setReason] = useState("");
   const [amountError, setAmountError] = useState<string | null>(null);
+  const [reasonError, setReasonError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setAmountError(null);
+    setReasonError(null);
+
+    const trimmedReason = reason.trim();
+    if (!trimmedReason) {
+      setReasonError("A reason is required.");
+      return;
+    }
 
     if (decision === "APPROVED") {
       const minor = parseEuroToMinorUnits(approvedAmount);
@@ -48,7 +56,7 @@ export function DecisionForm({
       }
       setSubmitting(true);
       try {
-        await onSubmit({ decision, approvedAmountMinor: minor, reason });
+        await onSubmit({ decision, approvedAmountMinor: minor, reason: trimmedReason });
       } finally {
         setSubmitting(false);
       }
@@ -57,7 +65,7 @@ export function DecisionForm({
 
     setSubmitting(true);
     try {
-      await onSubmit({ decision, reason });
+      await onSubmit({ decision, reason: trimmedReason });
     } finally {
       setSubmitting(false);
     }
@@ -152,13 +160,24 @@ export function DecisionForm({
         <label>
           Reason
           <textarea
+            aria-describedby={reasonError ? "decision-reason-error" : undefined}
+            aria-invalid={reasonError ? true : undefined}
             minLength={1}
-            onChange={(event) => setReason(event.target.value)}
+            onChange={(event) => {
+              setReason(event.target.value);
+              setReasonError(null);
+            }}
             required
             rows={4}
             value={reason}
           />
         </label>
+
+        {reasonError ? (
+          <p className="error" id="decision-reason-error" role="alert">
+            {reasonError}
+          </p>
+        ) : null}
 
         <button className="primary-button" type="submit">
           {submitting ? "Saving…" : mode === "confirm" ? "Submit" : "Record decision"}

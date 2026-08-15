@@ -75,8 +75,8 @@ Expand-only migration: add enum value and nullable column, deploy API that under
 
 ### Known limitations
 
-- Header-based identity is spoofable; production must replace `createContext` with a verified session.
+- Header identity is a local harness (`x-user-id` / `x-user-role`), not session issuance. Missing or unrecognised headers are unauthenticated (401). Anyone who can set headers can spoof a role; production must replace `createContext` with a verified session. Out of scope for this take-home.
 - Notifications are at-most-once best-effort after commit; a crash between commit and `send` loses the event.
-- `SELECT FOR UPDATE` only serializes writers that use this path; ad-hoc SQL still races.
-- PostgreSQL `INTEGER` caps approved amounts; values above 32-bit are out of scope.
-- In-memory repository tests prove the state machine; true lock behaviour should also be covered with a DB-backed test if time allows, otherwise documented as unverified at the isolation-level.
+- `SELECT FOR UPDATE` only serializes writers that use this path; ad-hoc SQL still races. Concurrent `decide` is covered by a PostgreSQL integration test when `DATABASE_URL` is available.
+- PostgreSQL `INTEGER` / Prisma `Int` (32-bit, max `2_147_483_647`) is the amount ceiling. Workflow values fit; `BigInt` is out of scope. Domain and UI reject amounts above that bound; `Number.MAX_SAFE_INTEGER` is not stored.
+- Seed never reopens `APPROVED`/`REJECTED` rows. If the original demo ids are already terminal, a rerun inserts a new `PENDING_REVIEW` row per amount band so the UI still has something to exercise.
